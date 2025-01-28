@@ -65,8 +65,8 @@ Docker provides an isolated environment for running your application, ensuring c
 1. **Clone the Repository:**
 
     ```bash
-    git clone https://github.com/asferrer/dataset_exporter.git
-    cd dataset_exporter
+    git clone https://github.com/asferrer/dataset-exportation-tool.git
+    cd dataset-exportation-tool
     ```
 
 2. **Build the Docker Image:**
@@ -122,8 +122,8 @@ If you prefer running the application directly on your local machine without con
 1. **Clone the Repository:**
 
     ```bash
-    git clone https://github.com/asferrer/dataset_exporter.git
-    cd dataset_exporter
+    git clone https://github.com/asferrer/dataset-exportation-tool.git
+    cd dataset-exportation-tool
     ```
 
 2. **Set Up a Virtual Environment (Recommended):**
@@ -230,7 +230,7 @@ For streamlined deployments, especially in production environments, Docker offer
 1. **Navigate to the Project Directory:**
 
     ```bash
-    cd dataset_exporter
+    cd dataset-exportation-tool
     ```
 
 2. **Build the Docker Image:**
@@ -292,8 +292,8 @@ Contributions are welcome! If you have suggestions, bug reports, or want to cont
 2. **Clone Your Fork:**
 
     ```bash
-    git clone https://github.com/asferrer/dataset_exporter.git
-    cd dataset_exporter
+    git clone https://github.com/asferrer/dataset-exportation-tool.git
+    cd dataset-exportation-tool
     ```
 
 3. **Create a New Branch:**
