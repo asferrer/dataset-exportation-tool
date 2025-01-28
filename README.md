@@ -1,4 +1,4 @@
-# Interactive Annotation Dataset Tool
+# Interactive Dataset Exportation Tool
 
 ![Streamlit](https://img.shields.io/badge/Streamlit-v1.41.1-blue)
 ![Python](https://img.shields.io/badge/Python-3.10-blue)
