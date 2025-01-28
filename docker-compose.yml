@@ -4,11 +4,11 @@ services:
   app:
     build: .
     ports:
-      - "8501:8501"
+      - "8503:8503"
     volumes:
       - ./data:/app/data
     environment:
       - STREAMLIT_SERVER_HEADLESS=true
-      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_PORT=8503
       - STREAMLIT_SERVER_ADDRESS=0.0.0.0
       - STREAMLIT_SERVER_ENABLECORS=false
