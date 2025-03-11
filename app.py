@@ -32,7 +32,7 @@ def load_coco_annotations(file):
         ann_ids = [x for x in ann_ids if x is not None]
         if len(ann_ids) != len(set(ann_ids)):
             st.warning("Duplicate annotation IDs detected in this COCO dataset; reassigning them...")
-            new_id = 1
+            new_id = 0
             for ann in data["annotations"]:
                 ann["id"] = new_id
                 new_id += 1
@@ -78,8 +78,8 @@ def modify_labels_coco(data, class_mapping, classes_to_delete, new_classes=None)
     2) Renames classes according to 'class_mapping'.
     3) Adds 'new_classes' without annotations (if they do not already exist).
     4) Sorts classes alphabetically by 'name'.
-    5) Reassigns category IDs in alphabetical order and updates annotations.
-    6) Groups annotations of renamed classes under the same name.
+    5) Reassigns category IDs in alphabetical order (starting en 0) and updates annotations.
+    6) Groups annotations of renamed classes under the same class.
     """
     if new_classes is None:
         new_classes = []
@@ -88,30 +88,33 @@ def modify_labels_coco(data, class_mapping, classes_to_delete, new_classes=None)
     original_annotations = data.get('annotations', [])
     original_images = data.get('images', [])
 
-    # 1) Remove categories that are in classes_to_delete
-    #    And rename those in class_mapping
+    # Diccionario para mapear ID antiguo a nuevo nombre (después de aplicar la renombrada)
+    old_id_to_new_name = {}
+
+    # 1) Remover categorías a eliminar y renombrar aquellas en el mapping
     filtered_categories = []
     for cat in original_categories:
         old_name = cat['name']
         if old_name in classes_to_delete:
             continue
 
-        # Rename if in the mapping
+        # Renombrar si está en el mapping
         new_name = class_mapping.get(old_name, old_name)
         new_name = sanitize_class_name(new_name)
         filtered_categories.append({
-            "id": cat["id"],  # Temporarily keep the old id
+            "id": cat["id"],  # Se conserva el id temporal
             "name": new_name,
             "supercategory": cat.get("supercategory", "")
         })
+        old_id_to_new_name[cat["id"]] = new_name
 
-    # 2) Add 'new_classes' if they don't already exist
+    # 2) Agregar nuevas clases si no existen ya
     existing_names = {c["name"] for c in filtered_categories}
     for cls in new_classes:
         cls_sanitized = sanitize_class_name(cls)
         if cls_sanitized and cls_sanitized not in existing_names:
             filtered_categories.append({
-                "id": None,  # Temporary, will reassign later
+                "id": None,  # Temporal, se reasignará luego
                 "name": cls_sanitized,
                 "supercategory": ""
             })
@@ -119,7 +122,7 @@ def modify_labels_coco(data, class_mapping, classes_to_delete, new_classes=None)
         else:
             st.warning(f"Invalid or empty class name: '{cls}'")
 
-    # 3) Build the list of annotations, discarding those pointing to deleted categories
+    # 3) Construir la lista de anotaciones, descartando las que apuntan a categorías eliminadas
     kept_old_ids = {cat["id"] for cat in filtered_categories if cat["id"] is not None}
     new_annotations = []
     for ann in original_annotations:
@@ -127,13 +130,13 @@ def modify_labels_coco(data, class_mapping, classes_to_delete, new_classes=None)
         if old_cat_id in kept_old_ids:
             new_annotations.append(ann)
 
-    # 4) Sort categories alphabetically by 'name'
+    # 4) Ordenar categorías alfabéticamente por 'name'
     filtered_categories.sort(key=lambda c: c['name'])
 
-    # 5) Reassign IDs from 1..N and map annotations
+    # 5) Reasignar IDs (empezando en 0) y construir el mapeo para las anotaciones
     category_name_to_new_id = {}
     new_categories = []
-    new_id = 1
+    new_id = 0  # Cambiado para que comience en 0
     for cat in filtered_categories:
         name = cat['name']
         if name not in category_name_to_new_id:
@@ -145,24 +148,25 @@ def modify_labels_coco(data, class_mapping, classes_to_delete, new_classes=None)
             })
             new_id += 1
         else:
-            # Class already exists, do not add again
             st.warning(f"Duplicate class name detected: '{name}'. All annotations will be grouped under a single class.")
 
-    # 6) Update annotations with the new category IDs
+    # 6) Actualizar anotaciones con los nuevos IDs de categoría
     for ann in new_annotations:
         old_cat_id = ann["category_id"]
-        # Find the original category name
-        old_cat_name = next((c['name'] for c in original_categories if c['id'] == old_cat_id), None)
-        if old_cat_name:
-            new_cat_id = category_name_to_new_id.get(old_cat_name)
-            if new_cat_id:
+        # Usar el nuevo nombre mapeado (si se renombró)
+        new_cat_name = old_id_to_new_name.get(old_cat_id)
+        if new_cat_name is not None:
+            new_cat_id = category_name_to_new_id.get(new_cat_name)
+            if new_cat_id is not None:
                 ann["category_id"] = new_cat_id
+        else:
+            st.warning(f"Old category id {old_cat_id} not found in mapping; annotation {ann.get('id')} not updated.")
 
-    # 7) Remove images that have no annotations
+    # 7) Remover imágenes sin anotaciones
     annotated_img_ids = {ann['image_id'] for ann in new_annotations}
     new_images = [img for img in original_images if img['id'] in annotated_img_ids]
 
-    # 8) Verify bounding boxes
+    # 8) Verificar bounding boxes (descartar anotaciones con bbox inválido)
     final_annotations = []
     for ann in new_annotations:
         x, y, w, h = ann["bbox"]
@@ -171,7 +175,7 @@ def modify_labels_coco(data, class_mapping, classes_to_delete, new_classes=None)
         else:
             st.warning(f"Annotation with ID {ann['id']} removed due to invalid bbox.")
 
-    # 9) Save back to data
+    # 9) Guardar de vuelta en data
     data['categories'] = new_categories
     data['annotations'] = final_annotations
     data['images'] = new_images
@@ -180,10 +184,10 @@ def modify_labels_coco(data, class_mapping, classes_to_delete, new_classes=None)
 
 def modify_labels_pascal_voc(root, class_mapping, classes_to_delete, new_classes=None):
     """
-    Modifies labels in Pascal VOC XML files by:
-    1) Removing objects of classes in 'classes_to_delete'.
-    2) Renaming objects according to 'class_mapping'.
-    Note: Adding new classes without annotations is not directly applicable in Pascal VOC.
+    Modifica las etiquetas en archivos XML de Pascal VOC realizando:
+    1) Remoción de objetos de clases en 'classes_to_delete'.
+    2) Renombrado de objetos según 'class_mapping'.
+    Nota: Agregar nuevas clases sin anotaciones no es aplicable directamente en Pascal VOC.
     """
     if root is None:
         return None
@@ -202,18 +206,15 @@ def modify_labels_pascal_voc(root, class_mapping, classes_to_delete, new_classes
             st.info(f"Object renamed from '{original_name}' to '{new_name_sanitized}'.")
             obj.find('name').text = new_name_sanitized
 
-    # Remove marked objects
+    # Remover los objetos marcados
     for obj in to_remove:
         root.remove(obj)
 
-    # Pascal VOC does not allow adding <object> without a bounding box
     if not root.findall('object'):
         st.warning("No objects remaining in the image after modifications.")
         return None
 
-    # Adding new classes without annotations is not directly applicable in Pascal VOC
-    # New classes will be handled in annotations if added manually
-
+    # Para Pascal VOC no se pueden agregar <object> sin un bounding box
     return root
 
 # --------------------------------------------------------------------------------
@@ -222,7 +223,7 @@ def modify_labels_pascal_voc(root, class_mapping, classes_to_delete, new_classes
 
 def merge_coco_datasets(datasets):
     """
-    Merges multiple COCO datasets into a single dataset.
+    Merge multiple COCO datasets into a single dataset.
     Ensures that categories with the same name are merged and have unique IDs.
     """
     merged_data = {
@@ -233,9 +234,9 @@ def merge_coco_datasets(datasets):
     category_name_set = set()
     all_categories = []
     image_id_offset = 0
-    annotation_id = 1
+    annotation_id = 0
 
-    # 1. Collect all unique categories
+    # 1. Recopilar todas las categorías únicas
     for data in datasets:
         if not data:
             continue
@@ -246,13 +247,13 @@ def merge_coco_datasets(datasets):
                 category_name_set.add(cat_name)
                 all_categories.append({'name': cat_name, 'supercategory': supercat})
 
-    # 2. Sort categories alphabetically
+    # 2. Ordenar categorías alfabéticamente
     all_categories = sorted(all_categories, key=lambda c: c['name'])
 
-    # 3. Assign new IDs to categories
+    # 3. Asignar nuevos IDs a las categorías (0-indexados)
     category_name_to_id = {}
     new_categories = []
-    new_id = 1
+    new_id = 0
     for cat in all_categories:
         name = cat['name']
         if name not in category_name_to_id:
@@ -265,39 +266,37 @@ def merge_coco_datasets(datasets):
             new_id += 1
     merged_data['categories'] = new_categories
 
-    # 4. Merge images and annotations
+    # 4. Fusionar imágenes y anotaciones
     for data in datasets:
         if not data:
             continue
 
-        # Create a mapping from old image IDs to new image IDs
+        # Crear un mapeo de IDs de imagen antiguas a nuevas
         image_id_mapping = {}
         for img in data['images']:
             new_image_id = img['id'] + image_id_offset
             image_id_mapping[img['id']] = new_image_id
-            # Copy the image to avoid modifying the original
             img_copy = copy.deepcopy(img)
             img_copy['id'] = new_image_id
             merged_data['images'].append(img_copy)
 
-        # Update the image ID offset
+        # Actualizar offset de imagenes
         if merged_data['images']:
             image_id_offset = max(img['id'] for img in merged_data['images']) + 1
         else:
             image_id_offset = 1
 
-        # Process annotations
+        # Procesar anotaciones
         for ann in data['annotations']:
             ann_copy = copy.deepcopy(ann)
             ann_copy['id'] = annotation_id
-            # Update image_id
             ann_copy['image_id'] = image_id_mapping.get(ann['image_id'], ann['image_id'])
-            # Map category_id to the new ID based on the name
             old_cat_id = ann['category_id']
+            # Buscar el nombre de la categoría en el dataset original
             old_cat_name = next((c['name'] for c in data['categories'] if c['id'] == old_cat_id), None)
-            if old_cat_name:
+            if old_cat_name is not None:
                 new_cat_id = category_name_to_id.get(old_cat_name)
-                if new_cat_id:
+                if new_cat_id is not None:
                     ann_copy['category_id'] = new_cat_id
                     merged_data['annotations'].append(ann_copy)
                     annotation_id += 1
@@ -508,7 +507,7 @@ def convert_pascal_voc_to_coco(roots):
         "categories": []
     }
     category_name_to_id = {}
-    category_id = 1
+    category_id = 0  # Empezar en 0 para categorías 0-indexadas
     annotation_id = 1
     image_id = 1
 
@@ -569,6 +568,7 @@ def convert_pascal_voc_to_coco(roots):
 
         image_id += 1
 
+    # Ordenar categorías alfabéticamente
     coco_data['categories'] = sorted(coco_data['categories'], key=lambda c: c['name'])
     return coco_data
 
@@ -590,7 +590,7 @@ def convert_coco_to_pascal_voc(data):
         filename = img_info.get('file_name', f"image_{img_id}.jpg")
         width = img_info.get('width', 0)
         height = img_info.get('height', 0)
-        depth = 3  # Assuming RGB
+        depth = 3  # Asumiendo RGB
 
         annotation = ET.Element('annotation')
         ET.SubElement(annotation, 'folder').text = 'images'
@@ -607,7 +607,7 @@ def convert_coco_to_pascal_voc(data):
 
         ET.SubElement(annotation, 'segmented').text = '0'
 
-        # <object> for each annotation
+        # Añadir <object> para cada anotación
         for ann in annotations_by_image[img_id]:
             obj = ET.SubElement(annotation, 'object')
             cat_name = categories[ann['category_id']]
@@ -634,7 +634,7 @@ def convert_coco_to_pascal_voc(data):
 def main():
     st.title("Interactive Tool for Modifying and Analyzing Annotation Datasets")
 
-    # State control
+    # Control de estado
     if "datasets" not in st.session_state:
         st.session_state.datasets = []
     if "folder_paths" not in st.session_state:
@@ -644,7 +644,7 @@ def main():
     if "merged_data" not in st.session_state:
         st.session_state.merged_data = None
 
-    # Step 1: Input Format
+    # Paso 1: Seleccionar formato de entrada
     st.header("Step 1: Select Input Format")
     dataset_format = st.selectbox(
         "Select the format of your datasets:",
@@ -652,7 +652,7 @@ def main():
     )
     st.session_state.dataset_format = dataset_format
 
-    # Step 2: Upload Files
+    # Paso 2: Subir archivos
     st.header("Step 2: Upload Annotation Files")
     uploaded_files = st.file_uploader(
         f"Upload one or more annotation files in {dataset_format} format",
@@ -660,7 +660,7 @@ def main():
         accept_multiple_files=True
     )
 
-    # If files are uploaded, show prefix inputs
+    # Si se suben archivos, mostrar inputs para prefijos
     if uploaded_files:
         st.subheader("Step 2B: (Optional) Specify image folder prefix for each dataset")
         st.markdown(
@@ -668,20 +668,17 @@ def main():
             "to adjust the file_name (for COCO) or filename/path (for Pascal VOC)."
         )
 
-        # Generate a text_input for each uploaded file
+        # Generar un text_input para cada archivo subido
         for i, f in enumerate(uploaded_files):
             prefix_key = f"prefix_input_{i}"
-            # Get the previous value from session_state, or "" if it doesn't exist
             default_val = st.session_state.get(prefix_key, "")
-
-            # Create the text_input with the default value. Streamlit will handle its value.
             prefix_val = st.text_input(
                 label=f"Image folder/prefix for Dataset {i+1} (file '{f.name}'):",
-                value=default_val,  # initial value
-                key=prefix_key      # key to 'remember' this value
+                value=default_val,
+                key=prefix_key
             )
 
-    # Load button
+    # Botón para cargar/actualizar archivos
     if st.button("Load/Refresh Files") and uploaded_files:
         st.session_state.datasets.clear()
         st.session_state.folder_paths.clear()
@@ -692,13 +689,13 @@ def main():
             folder_path = st.session_state.get(prefix_key, "")
             st.session_state.folder_paths.append(folder_path)
 
-            # Load based on dataset_format
+            # Cargar según el formato seleccionado
             if dataset_format in ["COCO", "COCO Segmentation"]:
                 data = load_coco_annotations(file)
                 if dataset_format == "COCO Segmentation":
                     data = convert_segmentation_to_bboxes_coco(data)
 
-                # Adjust paths
+                # Ajustar rutas de imagen si se especificó prefijo
                 if folder_path:
                     for img in data["images"]:
                         old_file_name = img["file_name"].replace("\\", "/")
@@ -729,7 +726,7 @@ def main():
 
         st.success("Files have been loaded/refreshed successfully!")
 
-    # If datasets are loaded, perform analysis
+    # Si hay datasets cargados, realizar análisis
     if len(st.session_state.datasets) > 0:
         st.header("Current Datasets Analysis")
         label_sets = []
@@ -746,7 +743,7 @@ def main():
                     for obj in data.findall('object'):
                         label_sets.append(obj.find('name').text)
 
-        # Step 3: Modify / Delete / Add in one step
+        # Paso 3: Modificar / Eliminar / Agregar etiquetas en un solo paso
         st.header("Step 3: Modify, Merge, Delete or Add Labels (simultaneously)")
         st.markdown("Mark any combination of these options, then click 'Apply Label Changes' to do it all at once:")
         modify_labels_opt = st.checkbox("Rename (modify) labels?")
@@ -757,12 +754,12 @@ def main():
             label_set_unique = sorted(set(label_sets))
             st.info("Define your rename mapping, labels to delete, and/or new labels. Then click 'Apply Label Changes'.")
 
-            # Deletion
+            # Eliminación
             classes_to_delete = set()
             if delete_labels_opt:
                 classes_to_delete = set(st.multiselect("Select labels to delete:", label_set_unique))
 
-            # Renaming
+            # Renombrado
             class_mapping = {}
             if modify_labels_opt:
                 st.subheader("Rename Labels")
@@ -779,7 +776,7 @@ def main():
                         st.warning(f"The new name for class '{label}' is empty or invalid. The original name will be retained.")
                         class_mapping[label] = label
 
-            # Adding new classes (only COCO)
+            # Agregar nuevas clases (solo COCO)
             new_labels = []
             if add_new_labels_opt and dataset_format in ["COCO", "COCO Segmentation"]:
                 st.subheader("Add New Labels")
@@ -787,7 +784,6 @@ def main():
                 input_new_labels = st.text_input("New classes:", value="", key="new_labels_input")
                 if input_new_labels.strip():
                     proposed_new_labels = [lbl.strip() for lbl in input_new_labels.split(",") if lbl.strip()]
-                    # Validate new classes
                     valid_new_labels = []
                     for lbl in proposed_new_labels:
                         lbl_sanitized = sanitize_class_name(lbl)
@@ -799,7 +795,7 @@ def main():
                         valid_new_labels.append(lbl_sanitized)
                     new_labels = valid_new_labels
 
-            # Button to apply changes
+            # Botón para aplicar cambios
             if st.button("Apply Label Changes"):
                 newly_added_cats_overall = set()
                 st.session_state.datasets_backup = copy.deepcopy(st.session_state.datasets)
@@ -839,7 +835,7 @@ def main():
                     else:
                         st.info("No truly new categories were added (or they might already exist).")
 
-                    # Show "Updated Insights"
+                    # Mostrar "Updated Insights"
                     st.header("Updated Insights After Label Changes")
                     for idx, data in enumerate(st.session_state.datasets):
                         if dataset_format in ["COCO", "COCO Segmentation"] and data is not None:
@@ -850,9 +846,9 @@ def main():
                             visualize_dataset_insights(insights, f"Dataset {idx+1} (Updated)")
                 except Exception as e:
                     st.error(f"Error applying label changes: {e}")
-                    st.session_state.datasets = st.session_state.datasets_backup  # Revert changes
+                    st.session_state.datasets = st.session_state.datasets_backup  # Revertir cambios
 
-        # 3B: Merge
+        # Paso 3B: Fusionar
         combine_datasets = False
         if len(st.session_state.datasets) > 1:
             st.header("Step 3B: (Optional) Combine Datasets")
@@ -891,11 +887,11 @@ def main():
         else:
             st.session_state.merged_data = st.session_state.datasets
 
-        # Step 4: Output Format
+        # Paso 4: Formato de salida
         st.header("Step 4: Select Output Format")
         output_format = st.selectbox("Select the output annotation format:", ["COCO", "Pascal VOC"])
 
-        # Step 5: Download
+        # Paso 5: Descargar
         st.header("Step 5: Generate and Download Annotation File(s)")
         if st.button("Generate and Download Annotation File(s)"):
             final_datasets = st.session_state.merged_data
@@ -904,7 +900,7 @@ def main():
                 return
 
             if combine_datasets:
-                # Single combined dataset
+                # Dataset combinado único
                 if output_format == "COCO":
                     if dataset_format in ["COCO", "COCO Segmentation"]:
                         if isinstance(final_datasets, dict):
@@ -964,7 +960,7 @@ def main():
                                 mime="application/zip"
                             )
             else:
-                # Multiple datasets separately
+                # Datasets separadas
                 for idx, data in enumerate(final_datasets):
                     if data is None:
                         continue
